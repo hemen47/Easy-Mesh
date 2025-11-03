@@ -1,177 +1,107 @@
 #!/bin/bash
 
-# Check if the script is run as root
-if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root" 
-   sleep 1
-   exit 1
-fi
+#############################################################################
+# EasyMesh - Professional EasyTier VPN Management Script
+# Version: 1.0.0 Stable
+# Author: Musixal
+# Telegram: @Gozar_Xray
+# GitHub: github.com/Musixal/easy-mesh
+# License: MIT
+#############################################################################
 
-#color codes
-GREEN="\033[0;32m"
-CYAN="\033[0;36m"
-WHITE="\033[1;37m"
-RESET="\033[0m"
-MAGENTA="\033[0;35m"
-RED="\033[0;31m"
-YELLOW="\033[0;33m"
+set -euo pipefail  # Exit on error, undefined variables, and pipe failures
 
-# just press key to continue
-press_key(){
- read -p "Press Enter to continue..."
+#############################################################################
+# CONFIGURATION CONSTANTS
+#############################################################################
+
+readonly SCRIPT_VERSION="1.0.0"
+readonly EASYTIER_VERSION="v1.2.0"
+readonly INSTALL_DIR="/opt/easytier"
+readonly CONFIG_DIR="/etc/easytier"
+readonly SERVICE_NAME="easymesh.service"
+readonly SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}"
+readonly WATCHDOG_SERVICE="easymesh-watchdog.service"
+readonly WATCHDOG_FILE="/etc/systemd/system/${WATCHDOG_SERVICE}"
+readonly LOG_FILE="/var/log/easymesh.log"
+readonly LOCK_FILE="/var/lock/easymesh.lock"
+
+# Binary paths
+readonly EASYTIER_CORE="${INSTALL_DIR}/easytier-core"
+readonly EASYTIER_CLI="${INSTALL_DIR}/easytier-cli"
+
+# Download URLs
+readonly BASE_URL="https://github.com/Musixal/Easy-Mesh/raw/main/core/${EASYTIER_VERSION}"
+readonly URL_X86="${BASE_URL}/easytier-linux-x86_64/"
+readonly URL_ARM="${BASE_URL}/easytier-linux-armv7/"
+readonly URL_ARM_HF="${BASE_URL}/easytier-linux-armv7hf/"
+
+#############################################################################
+# COLOR CODES
+#############################################################################
+
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[0;33m'
+readonly BLUE='\033[0;34m'
+readonly MAGENTA='\033[0;35m'
+readonly CYAN='\033[0;36m'
+readonly WHITE='\033[1;37m'
+readonly RESET='\033[0m'
+readonly BOLD='\033[1m'
+
+#############################################################################
+# UTILITY FUNCTIONS
+#############################################################################
+
+# Logging function
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo -e "${timestamp} [${level}] ${message}" | tee -a "${LOG_FILE}" 2>/dev/null || true
 }
 
-# Define a function to colorize text
-colorize() {
+# Print colored output
+print_color() {
     local color="$1"
-    local text="$2"
-    local style="${3:-normal}"
+    local message="$2"
+    local style="${3:-}"
 
-    # Define ANSI color codes
-    local black="\033[30m"
-    local red="\033[31m"
-    local green="\033[32m"
-    local yellow="\033[33m"
-    local blue="\033[34m"
-    local magenta="\033[35m"
-    local cyan="\033[36m"
-    local white="\033[37m"
-    local reset="\033[0m"
-
-    # Define ANSI style codes
-    local normal="\033[0m"
-    local bold="\033[1m"
-    local underline="\033[4m"
-
-    # Select color code
-    local color_code
-    case $color in
-        black) color_code=$black ;;
-        red) color_code=$red ;;
-        green) color_code=$green ;;
-        yellow) color_code=$yellow ;;
-        blue) color_code=$blue ;;
-        magenta) color_code=$magenta ;;
-        cyan) color_code=$cyan ;;
-        white) color_code=$white ;;
-        *) color_code=$reset ;;
+    case "$color" in
+        red) echo -e "${style}${RED}${message}${RESET}" ;;
+        green) echo -e "${style}${GREEN}${message}${RESET}" ;;
+        yellow) echo -e "${style}${YELLOW}${message}${RESET}" ;;
+        blue) echo -e "${style}${BLUE}${message}${RESET}" ;;
+        magenta) echo -e "${style}${MAGENTA}${message}${RESET}" ;;
+        cyan) echo -e "${style}${CYAN}${message}${RESET}" ;;
+        white) echo -e "${style}${WHITE}${message}${RESET}" ;;
+        *) echo -e "${message}" ;;
     esac
-
-    # Select style code
-    local style_code
-    case $style in
-        bold) style_code=$bold ;;
-        underline) style_code=$underline ;;
-        normal | *) style_code=$normal ;;
-    esac
-
-    echo -e "${style_code}${color_code}${text}${reset}"
 }
 
-# Function to kill all easytier processes safely
-kill_easytier_processes() {
-    local pids=$(pgrep -f "easytier-core")
-    if [ -n "$pids" ]; then
-        colorize yellow "Stopping existing easytier processes..." bold
-        # Try graceful shutdown first
-        kill -15 $pids 2>/dev/null
-        sleep 3
-        # Force kill if still running
-        pids=$(pgrep -f "easytier-core")
-        if [ -n "$pids" ]; then
-            kill -9 $pids 2>/dev/null
-            sleep 1
-        fi
-        colorize green "Existing processes stopped." bold
-    fi
-}
-
-# Function to check if port is available
-check_port_available() {
-    local port=$1
-    if command -v ss &> /dev/null; then
-        ss -tuln | grep -q ":$port " && return 1
-    elif command -v netstat &> /dev/null; then
-        netstat -tuln | grep -q ":$port " && return 1
-    fi
-    return 0
-}
-
-install_easytier() {
-    # Define the directory and files
-    DEST_DIR="/root/easytier"
-    FILE1="easytier-core"
-    FILE2="easytier-cli"
-
-    # Version 1.2.0 URLs (More Stable)
-    URL_X86="https://github.com/Musixal/Easy-Mesh/raw/main/core/v1.2.0/easytier-linux-x86_64/"
-    URL_ARM_SOFT="https://github.com/Musixal/Easy-Mesh/raw/main/core/v1.2.0/easytier-linux-armv7/"
-    URL_ARM_HARD="https://github.com/Musixal/Easy-Mesh/raw/main/core/v1.2.0/easytier-linux-armv7hf/"
-
-    # Check if the directory exists
-    if [ -d "$DEST_DIR" ]; then
-        # Check if the files exist
-        if [ -f "$DEST_DIR/$FILE1" ] && [ -f "$DEST_DIR/$FILE2" ]; then
-            colorize green "EasyMesh Core v1.2.0 Installed" bold
-            return 0
-        fi
-    fi
-
-    # Detect the system architecture
-    ARCH=$(uname -m)
-    if [ "$ARCH" = "x86_64" ]; then
-        URL=$URL_X86
-    elif [ "$ARCH" = "armv7l" ] || [ "$ARCH" = "aarch64" ]; then
-        if [ "$(ldd /bin/ls 2>/dev/null | grep -c 'armhf')" -eq 1 ]; then
-            URL=$URL_ARM_HARD
-        else
-            URL=$URL_ARM_SOFT
-        fi
-    else
-        colorize red "Unsupported architecture: $ARCH\n" bold
-        return 1
-    fi
-
-    mkdir -p $DEST_DIR &> /dev/null
-    colorize yellow "Downloading EasyMesh Core v1.2.0...\n"
-
-    # Download with error handling
-    if ! curl -Ls "$URL/easytier-cli" -o "$DEST_DIR/easytier-cli"; then
-        colorize red "Failed to download easytier-cli\n" bold
-        return 1
-    fi
-
-    if ! curl -Ls "$URL/easytier-core" -o "$DEST_DIR/easytier-core"; then
-        colorize red "Failed to download easytier-core\n" bold
-        return 1
-    fi
-
-    if [ -f "$DEST_DIR/$FILE1" ] && [ -f "$DEST_DIR/$FILE2" ]; then
-        chmod +x "$DEST_DIR/easytier-cli"
-        chmod +x "$DEST_DIR/easytier-core"
-        colorize green "EasyMesh Core v1.2.0 Installed Successfully...\n" bold
-        sleep 1
-        return 0
-    else
-        colorize red "Failed to install EasyMesh Core...\n" bold
+# Check if running as root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_color red "❌ This script must be run as root (use sudo)" "${BOLD}"
         exit 1
     fi
 }
 
-# Call the function
-install_easytier
-
-generate_random_secret() {
-    openssl rand -hex 12
+# Press any key to continue
+press_key() {
+    echo ""
+    read -rp "Press Enter to continue..."
 }
 
-# Validate IPv4 address
-validate_ipv4() {
-    local ip=$1
-    if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-        local IFS='.'
-        local -a octets=($ip)
-        for octet in "${octets[@]}"; do
+# Validate IP address
+validate_ip() {
+    local ip="$1"
+    local regex='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+
+    if [[ $ip =~ $regex ]]; then
+        for octet in $(echo "$ip" | tr '.' ' '); do
             if ((octet > 255)); then
                 return 1
             fi
@@ -181,564 +111,783 @@ validate_ipv4() {
     return 1
 }
 
-# Check if IP is private
-is_private_ip() {
-    local ip=$1
-    if [[ $ip =~ ^10\. ]] || \
-       [[ $ip =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] || \
-       [[ $ip =~ ^192\.168\. ]]; then
+# Validate port number
+validate_port() {
+    local port="$1"
+    if [[ "$port" =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)); then
         return 0
     fi
     return 1
 }
 
-#Var
-EASY_CLIENT='/root/easytier/easytier-cli'
-SERVICE_FILE="/etc/systemd/system/easymesh.service"
+# Generate random network secret
+generate_secret() {
+    openssl rand -hex 12 2>/dev/null || head -c 12 /dev/urandom | xxd -p
+}
 
-connect_network_pool(){
-    clear
-    colorize cyan "Connect to the Mesh Network (v1.2.0)" bold
-    echo
-    colorize yellow "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-IMPORTANT CONFIGURATION GUIDE:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Detect system architecture
+detect_architecture() {
+    local arch=$(uname -m)
 
-1. LOCAL IP must be PRIVATE (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
-   - This is your MESH network IP (NOT your server's public IP)
-
-2. PEER ADDRESSES should be PUBLIC IPs of other servers
-   - Leave BLANK if this is the main server (reverse mode)
-
-3. All servers must use the SAME network secret
-
-EXAMPLE SETUP:
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Server 1 (Kharej - Public IP: 198.245.214.80):
-  - Peer: (leave blank)
-  - Local IP: 10.144.144.1 ← PRIVATE mesh IP
-
-Server 2 (Iran - Public IP: 185.x.x.x):
-  - Peer: 198.245.214.80 ← Kharej's PUBLIC IP
-  - Local IP: 10.144.144.2 ← PRIVATE mesh IP
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"
-    echo
-
-    read -p "[-] Enter Peer PUBLIC IPv4/IPv6 (comma separated, blank for reverse): " PEER_ADDRESSES
-
-    # Validate local IP with private IP check
-    while true; do
-        read -p "[*] Enter Local PRIVATE IPv4 (e.g., 10.144.144.1): " IP_ADDRESS
-        if [ -z "$IP_ADDRESS" ]; then
-            colorize red "IP address cannot be empty.\n"
-            continue
-        fi
-        if ! validate_ipv4 "$IP_ADDRESS"; then
-            colorize red "Invalid IPv4 address format.\n"
-            continue
-        fi
-        if ! is_private_ip "$IP_ADDRESS"; then
-            colorize red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            colorize red "ERROR: Local IP must be PRIVATE!" bold
-            colorize yellow "You entered: $IP_ADDRESS (This looks like a PUBLIC IP)"
-            echo ""
-            colorize cyan "Private IP ranges:" bold
-            echo "  - 10.0.0.0 to 10.255.255.255"
-            echo "  - 172.16.0.0 to 172.31.255.255"
-            echo "  - 192.168.0.0 to 192.168.255.255"
-            echo ""
-            colorize yellow "Your server's PUBLIC IP should only be used in PEER addresses!"
-            colorize red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            continue
-        fi
-        break
-    done
-
-    # Validate hostname
-    while true; do
-        read -r -p "[*] Enter Hostname (e.g., Hetzner): " HOSTNAME
-        if [ -z "$HOSTNAME" ]; then
-            colorize red "Hostname cannot be empty.\n"
-            continue
-        fi
-        # Sanitize hostname
-        HOSTNAME=$(echo "$HOSTNAME" | tr -cd '[:alnum:]-_' | cut -c1-63)
-        if [ -n "$HOSTNAME" ]; then
-            break
-        fi
-    done
-
-    # Validate port
-    while true; do
-        read -p "[-] Enter Tunnel Port (Default 2090): " PORT
-        if [ -z "$PORT" ]; then
-            PORT='2090'
-            break
-        fi
-        if [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1024 ] && [ "$PORT" -le 65535 ]; then
-            if check_port_available "$PORT"; then
-                break
+    case "$arch" in
+        x86_64)
+            echo "$URL_X86"
+            ;;
+        armv7l|aarch64)
+            if ldd /bin/ls 2>/dev/null | grep -q 'armhf'; then
+                echo "$URL_ARM_HF"
             else
-                colorize red "Port $PORT is already in use. Choose another port.\n"
+                echo "$URL_ARM"
             fi
-        else
-            colorize red "Invalid port. Use 1024-65535.\n"
+            ;;
+        *)
+            print_color red "❌ Unsupported architecture: $arch" "${BOLD}"
+            exit 1
+            ;;
+    esac
+}
+
+# Check if service exists
+service_exists() {
+    [[ -f "$SERVICE_FILE" ]]
+}
+
+# Check if core is installed
+core_installed() {
+    [[ -f "$EASYTIER_CORE" ]] && [[ -f "$EASYTIER_CLI" ]]
+}
+
+#############################################################################
+# INSTALLATION FUNCTIONS
+#############################################################################
+
+# Install required dependencies
+install_dependencies() {
+    log "INFO" "Checking and installing dependencies..."
+
+    local packages=("curl" "wget" "openssl" "systemd")
+    local missing_packages=()
+
+    for pkg in "${packages[@]}"; do
+        if ! command -v "$pkg" &>/dev/null; then
+            missing_packages+=("$pkg")
         fi
     done
 
-    echo ''
-    NETWORK_SECRET=$(generate_random_secret)
-    colorize cyan "[✓] Generated Network Secret: $NETWORK_SECRET" bold
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        print_color yellow "📦 Installing missing packages: ${missing_packages[*]}"
 
+        if command -v apt-get &>/dev/null; then
+            apt-get update -qq
+            apt-get install -y -qq "${missing_packages[@]}"
+        elif command -v yum &>/dev/null; then
+            yum install -y -q "${missing_packages[@]}"
+        elif command -v dnf &>/dev/null; then
+            dnf install -y -q "${missing_packages[@]}"
+        else
+            print_color red "❌ Unsupported package manager"
+            exit 1
+        fi
+    fi
+}
+
+# Install EasyTier core
+install_core() {
+    clear
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   📥 EasyTier Core Installation" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+
+    if core_installed; then
+        print_color green "✅ EasyTier core is already installed" "${BOLD}"
+        echo ""
+        read -rp "Do you want to reinstall? (y/N): " reinstall
+        if [[ ! "$reinstall" =~ ^[Yy]$ ]]; then
+            return 0
+        fi
+    fi
+
+    log "INFO" "Starting EasyTier core installation..."
+
+    # Detect architecture
+    local download_url=$(detect_architecture)
+    print_color blue "🔍 Detected architecture: $(uname -m)"
+    print_color blue "📡 Download URL: $download_url"
+    echo ""
+
+    # Create installation directory
+    mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
+
+    # Download binaries
+    print_color yellow "⬇️  Downloading easytier-core..."
+    if ! curl -fsSL "${download_url}easytier-core" -o "${EASYTIER_CORE}"; then
+        print_color red "❌ Failed to download easytier-core"
+        log "ERROR" "Failed to download easytier-core from $download_url"
+        exit 1
+    fi
+
+    print_color yellow "⬇️  Downloading easytier-cli..."
+    if ! curl -fsSL "${download_url}easytier-cli" -o "${EASYTIER_CLI}"; then
+        print_color red "❌ Failed to download easytier-cli"
+        log "ERROR" "Failed to download easytier-cli from $download_url"
+        exit 1
+    fi
+
+    # Set permissions
+    chmod +x "$EASYTIER_CORE" "$EASYTIER_CLI"
+
+    # Verify installation
+    if core_installed; then
+        print_color green "✅ EasyTier core installed successfully!" "${BOLD}"
+        log "INFO" "EasyTier core installed successfully"
+
+        # Display version
+        local version=$("$EASYTIER_CORE" --version 2>/dev/null || echo "Unknown")
+        print_color cyan "📌 Version: $version"
+    else
+        print_color red "❌ Installation failed"
+        log "ERROR" "Installation verification failed"
+        exit 1
+    fi
+
+    echo ""
+    press_key
+}
+
+# Remove EasyTier core
+remove_core() {
+    clear
+    print_color red "═══════════════════════════════════════" "${BOLD}"
+    print_color red "   🗑️  Remove EasyTier Core" "${BOLD}"
+    print_color red "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+
+    if service_exists; then
+        print_color red "❌ Service is still active. Please remove the service first."
+        log "WARN" "Attempted to remove core while service exists"
+        press_key
+        return 1
+    fi
+
+    if ! core_installed; then
+        print_color yellow "⚠️  EasyTier core is not installed"
+        press_key
+        return 0
+    fi
+
+    print_color yellow "⚠️  This will permanently delete EasyTier core files"
+    read -rp "Are you sure? (y/N): " confirm
+
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        rm -rf "$INSTALL_DIR"
+        print_color green "✅ EasyTier core removed successfully"
+        log "INFO" "EasyTier core removed"
+    else
+        print_color blue "ℹ️  Operation cancelled"
+    fi
+
+    echo ""
+    press_key
+}
+
+#############################################################################
+# NETWORK CONFIGURATION
+#############################################################################
+
+# Configure and start EasyMesh network
+configure_network() {
+    clear
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   🌐 EasyMesh Network Configuration" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+
+    if ! core_installed; then
+        print_color red "❌ EasyTier core is not installed. Please install it first."
+        press_key
+        return 1
+    fi
+
+    if service_exists; then
+        print_color yellow "⚠️  A service configuration already exists"
+        read -rp "Do you want to reconfigure? (y/N): " reconfig
+        if [[ ! "$reconfig" =~ ^[Yy]$ ]]; then
+            return 0
+        fi
+        stop_service
+    fi
+
+    log "INFO" "Starting network configuration..."
+
+    # Configuration variables
+    local ipv4_address hostname network_name network_secret
+    local peer_addresses port protocol
+    local enable_encryption="yes"
+    local enable_ipv6="no"
+    local enable_multi_thread="no"
+
+    # Display configuration guide
+    print_color yellow "📖 Configuration Guide:" "${BOLD}"
+    echo ""
+    echo "  • Leave peer addresses empty for reverse connection mode"
+    echo "  • UDP protocol is recommended for better stability"
+    echo "  • Use strong network secrets (min 12 characters)"
+    echo "  • Disable encryption only for testing purposes"
+    echo ""
+    print_color cyan "─────────────────────────────────────────"
+    echo ""
+
+    # Get peer addresses
+    read -rp "🔗 Peer addresses (comma-separated, or empty): " peer_addresses
+
+    # Get local IPv4 address
     while true; do
-        read -p "[*] Enter Network Secret (min 8 chars, Enter for generated): " USER_SECRET
-        if [ -z "$USER_SECRET" ]; then
-            break
-        fi
-        if [ ${#USER_SECRET} -ge 8 ]; then
-            NETWORK_SECRET="$USER_SECRET"
-            break
-        else
-            colorize red "Network secret must be at least 8 characters.\n"
-        fi
-    done
-
-    echo ''
-    colorize green "[-] Select Default Protocol:" bold
-    echo "1) tcp"
-    echo "2) udp (Recommended for stability)"
-    echo "3) ws"
-    echo "4) wss"
-    read -p "[*] Select protocol (default: 2 for udp): " PROTOCOL_CHOICE
-
-    case $PROTOCOL_CHOICE in
-        1) DEFAULT_PROTOCOL="tcp" ;;
-        2|"") DEFAULT_PROTOCOL="udp" ;;
-        3) DEFAULT_PROTOCOL="ws" ;;
-        4) DEFAULT_PROTOCOL="wss" ;;
-        *)
-            colorize yellow "Invalid choice. Using udp."
-            DEFAULT_PROTOCOL="udp"
-            ;;
-    esac
-
-    echo
-    read -p "[-] Enable encryption? (yes/no, default: yes): " ENCRYPTION_CHOICE
-    case $ENCRYPTION_CHOICE in
-        [Nn]*)
-            ENCRYPTION_OPTION="--disable-encryption"
-            colorize yellow "Encryption disabled"
-            ;;
-        *)
-            ENCRYPTION_OPTION=""
-            colorize yellow "Encryption enabled"
-            ;;
-    esac
-
-    echo
-
-    read -p "[-] Enable multi-thread? (yes/no, default: no): " MULTI_THREAD
-    case $MULTI_THREAD in
-        [Yy]*)
-            MULTI_THREAD="--multi-thread"
-            colorize yellow "Multi-thread enabled"
-            ;;
-        *)
-            MULTI_THREAD=""
-            colorize yellow "Multi-thread disabled (Recommended)"
-            ;;
-    esac
-
-    echo
-
-    read -p "[-] Enable IPv6? (yes/no, default: no): " IPV6_MODE
-    case $IPV6_MODE in
-        [Yy]*)
-            IPV6_MODE=""
-            colorize yellow "IPv6 enabled"
-            ;;
-        *)
-            IPV6_MODE="--disable-ipv6"
-            colorize yellow "IPv6 disabled"
-            ;;
-    esac
-
-    echo
-
-    # Process peer addresses with improved IPv6 handling
-    IFS=',' read -ra ADDR_ARRAY <<< "$PEER_ADDRESSES"
-    PROCESSED_ADDRESSES=()
-
-    for ADDRESS in "${ADDR_ARRAY[@]}"; do
-        ADDRESS=$(echo $ADDRESS | xargs)
-
-        # Skip empty addresses
-        if [ -z "$ADDRESS" ]; then
+        read -rp "🏠 Local IPv4 address (e.g., 10.144.144.1): " ipv4_address
+        if [[ -z "$ipv4_address" ]]; then
+            print_color red "❌ IPv4 address cannot be empty"
             continue
         fi
-
-        # Handle IPv6 addresses (contains multiple colons)
-        if [[ "$ADDRESS" == *:*:* ]]; then
-            # This is an IPv6 address
-            if [[ "$ADDRESS" != \[*\] ]]; then
-                ADDRESS="[$ADDRESS]"
-            fi
+        if validate_ip "$ipv4_address"; then
+            break
+        else
+            print_color red "❌ Invalid IPv4 address format"
         fi
-
-        PROCESSED_ADDRESSES+=("${DEFAULT_PROTOCOL}://${ADDRESS}:${PORT}")
     done
 
-    JOINED_ADDRESSES=$(IFS=' '; echo "${PROCESSED_ADDRESSES[*]}")
+    # Get hostname
+    while true; do
+        read -rp "💻 Hostname (e.g., Server-Iran-1): " hostname
+        if [[ -n "$hostname" ]]; then
+            break
+        fi
+        print_color red "❌ Hostname cannot be empty"
+    done
 
-    if [ -n "$JOINED_ADDRESSES" ]; then
-        PEER_ADDRESS="--peers ${JOINED_ADDRESSES}"
+    # Get network name
+    while true; do
+        read -rp "🌐 Network name (e.g., my-vpn-network): " network_name
+        if [[ -n "$network_name" ]]; then
+            break
+        fi
+        print_color red "❌ Network name cannot be empty"
+    done
+
+    # Get port
+    while true; do
+        read -rp "🔌 Listen port (default: 11010): " port
+        port=${port:-11010}
+        if validate_port "$port"; then
+            break
+        fi
+        print_color red "❌ Invalid port number (1-65535)"
+    done
+
+    # Generate and confirm network secret
+    local generated_secret=$(generate_secret)
+    echo ""
+    print_color cyan "🔐 Generated network secret: ${BOLD}$generated_secret"
+    read -rp "Enter network secret (press Enter to use generated): " network_secret
+    network_secret=${network_secret:-$generated_secret}
+
+    # Select protocol
+    echo ""
+    print_color green "📡 Select Protocol:" "${BOLD}"
+    echo "  1) TCP"
+    echo "  2) UDP (Recommended)"
+    echo "  3) WebSocket (WS)"
+    echo "  4) WebSocket Secure (WSS)"
+    echo ""
+    read -rp "Select protocol [1-4] (default: 2): " protocol_choice
+    protocol_choice=${protocol_choice:-2}
+
+    case "$protocol_choice" in
+        1) protocol="tcp" ;;
+        2) protocol="udp" ;;
+        3) protocol="ws" ;;
+        4) protocol="wss" ;;
+        *) protocol="udp" ;;
+    esac
+
+    # Encryption option
+    echo ""
+    read -rp "🔒 Enable encryption? (Y/n): " enable_encryption
+    enable_encryption=${enable_encryption:-yes}
+
+    # IPv6 option
+    read -rp "🌍 Enable IPv6? (y/N): " enable_ipv6
+    enable_ipv6=${enable_ipv6:-no}
+
+    # Multi-thread option
+    read -rp "⚡ Enable multi-thread? (y/N): " enable_multi_thread
+    enable_multi_thread=${enable_multi_thread:-no}
+
+    # Build command options
+    local cmd_options="--ipv4 $ipv4_address"
+    cmd_options+=" --hostname $hostname"
+    cmd_options+=" --network-name $network_name"
+    cmd_options+=" --network-secret $network_secret"
+    cmd_options+=" --default-protocol $protocol"
+
+    # Add listeners
+    cmd_options+=" --listeners ${protocol}://0.0.0.0:${port}"
+    if [[ "$enable_ipv6" =~ ^[Yy]$ ]]; then
+        cmd_options+=" ${protocol}://[::]:${port}"
     else
-        PEER_ADDRESS=""
-        colorize yellow "No peers specified. Running in reverse mode.\n"
+        cmd_options+=" --disable-ipv6"
     fi
 
-    # Setup listeners based on IPv6 setting
-    if [ "$IPV6_MODE" == "--disable-ipv6" ]; then
-        LISTENERS="--listeners ${DEFAULT_PROTOCOL}://0.0.0.0:${PORT}"
-    else
-        LISTENERS="--listeners ${DEFAULT_PROTOCOL}://[::]:${PORT} ${DEFAULT_PROTOCOL}://0.0.0.0:${PORT}"
+    # Add peer addresses
+    if [[ -n "$peer_addresses" ]]; then
+        IFS=',' read -ra peers <<< "$peer_addresses"
+        for peer in "${peers[@]}"; do
+            peer=$(echo "$peer" | xargs)  # Trim whitespace
+            if [[ -n "$peer" ]]; then
+                # Handle IPv6 addresses
+                if [[ "$peer" == *:*:* ]] && [[ "$peer" != \[*\] ]]; then
+                    peer="[$peer]"
+                fi
+                cmd_options+=" --peers ${protocol}://${peer}:${port}"
+            fi
+        done
     fi
 
-    # Kill any existing processes before creating service
-    kill_easytier_processes
+    # Add encryption option
+    if [[ ! "$enable_encryption" =~ ^[Yy]$ ]]; then
+        cmd_options+=" --disable-encryption"
+    fi
 
-    # Create improved service file with better restart handling
-    SERVICE_FILE="/etc/systemd/system/easymesh.service"
+    # Add multi-thread option
+    if [[ "$enable_multi_thread" =~ ^[Yy]$ ]]; then
+        cmd_options+=" --multi-thread"
+    fi
 
-cat > $SERVICE_FILE <<EOF
+    # Create systemd service
+    create_service "$cmd_options"
+
+    # Start service
+    start_service
+
+    # Display configuration summary
+    echo ""
+    print_color green "═══════════════════════════════════════" "${BOLD}"
+    print_color green "   ✅ Configuration Summary" "${BOLD}"
+    print_color green "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+    print_color cyan "  IPv4 Address: $ipv4_address"
+    print_color cyan "  Hostname: $hostname"
+    print_color cyan "  Network Name: $network_name"
+    print_color cyan "  Network Secret: $network_secret"
+    print_color cyan "  Protocol: $protocol"
+    print_color cyan "  Port: $port"
+    print_color cyan "  Encryption: $([ "$enable_encryption" =~ ^[Yy]$ ] && echo 'Enabled' || echo 'Disabled')"
+    print_color cyan "  IPv6: $([ "$enable_ipv6" =~ ^[Yy]$ ] && echo 'Enabled' || echo 'Disabled')"
+    print_color cyan "  Multi-thread: $([ "$enable_multi_thread" =~ ^[Yy]$ ] && echo 'Enabled' || echo 'Disabled')"
+    echo ""
+
+    log "INFO" "Network configured: $hostname ($ipv4_address)"
+
+    press_key
+}
+
+#############################################################################
+# SERVICE MANAGEMENT
+#############################################################################
+
+# Create systemd service
+create_service() {
+    local cmd_options="$1"
+
+    log "INFO" "Creating systemd service..."
+
+    cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=EasyMesh Network Service v1.2.0
+Description=EasyMesh Network Service ${EASYTIER_VERSION}
+Documentation=https://easytier.cn
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/root/easytier
-ExecStartPre=/bin/sleep 2
-ExecStartPre=/bin/bash -c 'pkill -9 -f easytier-core || true'
-ExecStart=/root/easytier/easytier-core --ipv4 $IP_ADDRESS $PEER_ADDRESS --hostname $HOSTNAME --network-name default --network-secret $NETWORK_SECRET $LISTENERS $MULTI_THREAD $ENCRYPTION_OPTION $IPV6_MODE
+WorkingDirectory=${INSTALL_DIR}
+ExecStart=${EASYTIER_CORE} ${cmd_options}
 Restart=always
 RestartSec=5
 StartLimitInterval=0
 StartLimitBurst=0
+
+# Logging
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=easymesh
+
+# Process management
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=10
+TimeoutStartSec=30
+
+# Security hardening
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=${INSTALL_DIR} ${CONFIG_DIR} /var/log
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    # Reload and start service
-    sudo systemctl daemon-reload &> /dev/null
-    sudo systemctl enable easymesh.service &> /dev/null
-    sudo systemctl stop easymesh.service &> /dev/null
-    sleep 2
-    sudo systemctl start easymesh.service &> /dev/null
-
-    # Wait and verify service started
-    sleep 3
-    if systemctl is-active --quiet easymesh.service; then
-        colorize green "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" bold
-        colorize green "✓ EasyMesh Network Service Started Successfully!" bold
-        colorize green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" bold
-        echo "Configuration Summary:"
-        echo "  - Local Mesh IP: $IP_ADDRESS"
-        echo "  - Hostname: $HOSTNAME"
-        echo "  - Protocol: $DEFAULT_PROTOCOL"
-        echo "  - Port: $PORT"
-        echo "  - Network Secret: $NETWORK_SECRET"
-        if [ -n "$JOINED_ADDRESSES" ]; then
-            echo "  - Peers: ${JOINED_ADDRESSES}"
-        else
-            echo "  - Mode: Reverse (waiting for connections)"
-        fi
-        colorize green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" bold
-    else
-        colorize red "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" bold
-        colorize red "✗ Failed to start EasyMesh service" bold
-        colorize red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" bold
-        colorize yellow "Error Details:\n"
-        journalctl -u easymesh.service -n 30 --no-pager
-        echo ""
-        colorize yellow "Common Solutions:" bold
-        echo "1. Check if port $PORT is available: sudo ss -tuln | grep $PORT"
-        echo "2. Verify easytier-core exists: ls -la /root/easytier/"
-        echo "3. Test manual start: sudo /root/easytier/easytier-core --help"
-        echo "4. Check firewall: sudo ufw status"
-        colorize red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" bold
-    fi
-
-    press_key
+    systemctl daemon-reload
+    log "INFO" "Service file created successfully"
 }
 
-# Fixed display_peers function
-display_peers() {
-    if ! command -v watch &> /dev/null; then
-        colorize yellow "Installing 'watch' command...\n"
-        apt-get update -qq && apt-get install -y procps 2>/dev/null
-    fi
+# Start service
+start_service() {
+    print_color yellow "🚀 Starting EasyMesh service..."
 
-    if [ ! -f "$EASY_CLIENT" ]; then
-        colorize red "EasyTier CLI not found!\n" bold
-        press_key
-        return 1
-    fi
-
-    # Check if service is running
-    if ! systemctl is-active --quiet easymesh.service; then
-        colorize red "EasyMesh service is not running!\n" bold
-        press_key
-        return 1
-    fi
-
-    # Use watch with error handling
-    watch -n 1 "$EASY_CLIENT peer 2>/dev/null || echo 'Waiting for peers...'"
-}
-
-display_routes() {
-    if ! command -v watch &> /dev/null; then
-        colorize yellow "Installing 'watch' command...\n"
-        apt-get update -qq && apt-get install -y procps 2>/dev/null
-    fi
-
-    if [ ! -f "$EASY_CLIENT" ]; then
-        colorize red "EasyTier CLI not found!\n" bold
-        press_key
-        return 1
-    fi
-
-    if ! systemctl is-active --quiet easymesh.service; then
-        colorize red "EasyMesh service is not running!\n" bold
-        press_key
-        return 1
-    fi
-
-    watch -n 1 "$EASY_CLIENT route 2>/dev/null || echo 'Waiting for routes...'"
-}
-
-peer_center() {
-    if ! command -v watch &> /dev/null; then
-        colorize yellow "Installing 'watch' command...\n"
-        apt-get update -qq && apt-get install -y procps 2>/dev/null
-    fi
-
-    if [ ! -f "$EASY_CLIENT" ]; then
-        colorize red "EasyTier CLI not found!\n" bold
-        press_key
-        return 1
-    fi
-
-    if ! systemctl is-active --quiet easymesh.service; then
-        colorize red "EasyMesh service is not running!\n" bold
-        press_key
-        return 1
-    fi
-
-    watch -n 1 "$EASY_CLIENT peer-center 2>/dev/null || echo 'Waiting for peer center...'"
-}
-
-restart_easymesh_service() {
-    echo ''
-    if [[ ! -f $SERVICE_FILE ]]; then
-        colorize red "    EasyMesh service does not exist." bold
-        sleep 1
-        return 1
-    fi
-
-    colorize yellow "    Restarting EasyMesh service...\n" bold
-
-    # Kill processes first
-    kill_easytier_processes
-
-    sudo systemctl daemon-reload &> /dev/null
-    sudo systemctl restart easymesh.service &> /dev/null
-
-    sleep 3
-
-    if systemctl is-active --quiet easymesh.service; then
-        colorize green "    ✓ EasyMesh service restarted successfully." bold
-    else
-        colorize red "    ✗ Failed to restart EasyMesh service." bold
-        colorize yellow "    Check logs: sudo journalctl -u easymesh.service -n 50\n"
-    fi
-
-    echo ''
-    read -p "    Press Enter to continue..."
-}
-
-remove_easymesh_service() {
-    echo
-    if [[ ! -f $SERVICE_FILE ]]; then
-        colorize red "    EasyMesh service does not exist." bold
-        sleep 1
-        return 1
-    fi
-
-    colorize yellow "    Stopping EasyMesh service..." bold
-    sudo systemctl stop easymesh.service &> /dev/null
-
-    # Kill any remaining processes
-    kill_easytier_processes
-
-    colorize green "    EasyMesh service stopped.\n"
-
-    colorize yellow "    Disabling EasyMesh service..." bold
-    sudo systemctl disable easymesh.service &> /dev/null
-    colorize green "    EasyMesh service disabled.\n"
-
-    colorize yellow "    Removing EasyMesh service file..." bold
-    sudo rm -f /etc/systemd/system/easymesh.service &> /dev/null
-    colorize green "    EasyMesh service removed.\n"
-
-    colorize yellow "    Reloading systemd daemon..." bold
-    sudo systemctl daemon-reload &> /dev/null
-    colorize green "    Systemd daemon reloaded.\n"
-
-    read -p "    Press Enter to continue..."
-}
-
-show_network_secret() {
-    echo ''
-    if [[ -f $SERVICE_FILE ]]; then
-        NETWORK_SECRET=$(grep -oP '(?<=--network-secret )[^ ]+' $SERVICE_FILE)
-
-        if [[ -n $NETWORK_SECRET ]]; then
-            colorize cyan "    Network Secret Key: $NETWORK_SECRET" bold
-        else
-            colorize red "    Network Secret key not found" bold
-        fi
-    else
-        colorize red "    EasyMesh service does not exist." bold
-    fi
-    echo ''
-    read -p "    Press Enter to continue..."
-}
-
-view_service_status() {
-    if [[ ! -f $SERVICE_FILE ]]; then
-        colorize red "    EasyMesh service does not exist." bold
-        sleep 1
-        return 1
-    fi
-    clear
-    echo "=== Service Status ==="
-    sudo systemctl status easymesh.service --no-pager
-    echo ""
-    echo "=== Recent Logs (last 30 lines) ==="
-    sudo journalctl -u easymesh.service -n 30 --no-pager
-    echo ""
-    colorize cyan "Press Enter to return to menu"
-    read -p ""
-}
-
-set_watchdog() {
-    clear
-    view_watchdog_status
-    echo "---------------------------------------------"
-    echo
-    colorize cyan "Select your option:" bold
-    colorize green "1) Create watchdog service"
-    colorize red "2) Stop & remove watchdog service"
-    colorize yellow "3) View Logs"
-    colorize reset "4) Back"
-    echo ''
-    read -p "Enter your choice: " CHOICE
-    case $CHOICE in
-        1) start_watchdog ;;
-        2) stop_watchdog ;;
-        3) view_logs ;;
-        4) return 0;;
-        *) colorize red "Invalid option!" bold && sleep 1 && return 1;;
-    esac
-}
-
-start_watchdog() {
-    clear
-    colorize cyan "Watchdog Service Setup
-This monitors service health and restarts if issues detected.
-Recommended: Run on external (Kharej) server only." bold
-    echo ''
-
-    read -p "Enter the local IP address to monitor: " IP_ADDRESS
-    if ! validate_ipv4 "$IP_ADDRESS"; then
-        colorize red "Invalid IP address.\n"
+    if systemctl enable --now "$SERVICE_NAME" &>/dev/null; then
         sleep 2
-        return 1
-    fi
-
-    read -p "Enter latency threshold in ms (default: 200): " LATENCY_THRESHOLD
-    LATENCY_THRESHOLD=${LATENCY_THRESHOLD:-200}
-
-    read -p "Enter check interval in seconds (default: 10): " CHECK_INTERVAL
-    CHECK_INTERVAL=${CHECK_INTERVAL:-10}
-
-    read -p "Enter max failed pings before restart (default: 3): " MAX_FAILURES
-    MAX_FAILURES=${MAX_FAILURES:-3}
-
-    stop_watchdog &>/dev/null
-
-cat << 'WATCHDOG_SCRIPT' > /etc/monitor.sh
-#!/bin/bash
-
-# Configuration
-IP_ADDRESS="IP_PLACEHOLDER"
-LATENCY_THRESHOLD=LATENCY_PLACEHOLDER
-CHECK_INTERVAL=CHECK_PLACEHOLDER
-MAX_FAILURES=MAX_FAILURES_PLACEHOLDER
-SERVICE_NAME="easymesh.service"
-LOG_FILE="/var/log/easymesh-watchdog.log"
-MAX_LOG_SIZE=5242880  # 5MB
-FAILURE_COUNT=0
-
-# Rotate log if too large
-rotate_log() {
-    if [ -f "$LOG_FILE" ]; then
-        local size=$(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null)
-        if [ "$size" -gt "$MAX_LOG_SIZE" ]; then
-            mv "$LOG_FILE" "${LOG_FILE}.old"
-            touch "$LOG_FILE"
+        if systemctl is-active --quiet "$SERVICE_NAME"; then
+            print_color green "✅ Service started successfully" "${BOLD}"
+            log "INFO" "Service started successfully"
+        else
+            print_color red "❌ Service failed to start"
+            print_color yellow "📋 Checking logs..."
+            journalctl -u "$SERVICE_NAME" -n 20 --no-pager
+            log "ERROR" "Service failed to start"
         fi
+    else
+        print_color red "❌ Failed to enable service"
+        log "ERROR" "Failed to enable service"
+    fi
+}
+
+# Stop service
+stop_service() {
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        print_color yellow "⏸️  Stopping EasyMesh service..."
+        systemctl stop "$SERVICE_NAME"
+        print_color green "✅ Service stopped"
+        log "INFO" "Service stopped"
     fi
 }
 
 # Restart service
 restart_service() {
-    local restart_time=$(date +"%Y-%m-%d %H:%M:%S")
-    echo "$restart_time: Restarting service due to $FAILURE_COUNT consecutive failures..." >> "$LOG_FILE"
+    clear
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   🔄 Restart EasyMesh Service" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
 
-    # Kill existing processes
-    pkill -9 -f easytier-core
-    sleep 2
-
-    # Restart service
-    systemctl daemon-reload
-    systemctl restart "$SERVICE_NAME"
-
-    if [ $? -eq 0 ]; then
-        echo "$restart_time: Service restarted successfully." >> "$LOG_FILE"
-        FAILURE_COUNT=0
-    else
-        echo "$restart_time: Failed to restart service!" >> "$LOG_FILE"
+    if ! service_exists; then
+        print_color red "❌ Service does not exist"
+        press_key
+        return 1
     fi
 
-    rotate_log
+    print_color yellow "🔄 Restarting service..."
+
+    if systemctl restart "$SERVICE_NAME" &>/dev/null; then
+        sleep 2
+        if systemctl is-active --quiet "$SERVICE_NAME"; then
+            print_color green "✅ Service restarted successfully" "${BOLD}"
+            log "INFO" "Service restarted"
+        else
+            print_color red "❌ Service failed to restart"
+            log "ERROR" "Service failed to restart"
+        fi
+    else
+        print_color red "❌ Failed to restart service"
+        log "ERROR" "Failed to restart service"
+    fi
+
+    echo ""
+    press_key
+}
+
+# Remove service
+remove_service() {
+    clear
+    print_color red "═══════════════════════════════════════" "${BOLD}"
+    print_color red "   🗑️  Remove EasyMesh Service" "${BOLD}"
+    print_color red "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+
+    if ! service_exists; then
+        print_color yellow "⚠️  Service does not exist"
+        press_key
+        return 0
+    fi
+
+    print_color yellow "⚠️  This will stop and remove the EasyMesh service"
+    read -rp "Are you sure? (y/N): " confirm
+
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        print_color blue "ℹ️  Operation cancelled"
+        press_key
+        return 0
+    fi
+
+    # Stop service
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        print_color yellow "⏸️  Stopping service..."
+        systemctl stop "$SERVICE_NAME"
+    fi
+
+    # Disable service
+    print_color yellow "🔓 Disabling service..."
+    systemctl disable "$SERVICE_NAME" &>/dev/null
+
+    # Remove service file
+    print_color yellow "🗑️  Removing service file..."
+    rm -f "$SERVICE_FILE"
+
+    # Reload systemd
+    systemctl daemon-reload
+
+    print_color green "✅ Service removed successfully" "${BOLD}"
+    log "INFO" "Service removed"
+
+    echo ""
+    press_key
+}
+
+# View service status
+view_status() {
+    clear
+
+    if ! service_exists; then
+        print_color red "❌ Service does not exist"
+        press_key
+        return 1
+    fi
+
+    systemctl status "$SERVICE_NAME" --no-pager -l
+    echo ""
+    press_key
+}
+
+#############################################################################
+# NETWORK MONITORING
+#############################################################################
+
+# Display peers
+display_peers() {
+    clear
+
+    if ! core_installed; then
+        print_color red "❌ EasyTier core is not installed"
+        press_key
+        return 1
+    fi
+
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   👥 Network Peers (Auto-refresh)" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+    print_color yellow "Press Ctrl+C to exit"
+    echo ""
+
+    watch -n 1 -c "$EASYTIER_CLI peer"
+}
+
+# Display routes
+display_routes() {
+    clear
+
+    if ! core_installed; then
+        print_color red "❌ EasyTier core is not installed"
+        press_key
+        return 1
+    fi
+
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   🛣️  Network Routes (Auto-refresh)" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+    print_color yellow "Press Ctrl+C to exit"
+    echo ""
+
+    watch -n 1 -c "$EASYTIER_CLI route"
+}
+
+# Display peer center
+display_peer_center() {
+    clear
+
+    if ! core_installed; then
+        print_color red "❌ EasyTier core is not installed"
+        press_key
+        return 1
+    fi
+
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   🎯 Peer Center (Auto-refresh)" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+    print_color yellow "Press Ctrl+C to exit"
+    echo ""
+
+    watch -n 1 -c "$EASYTIER_CLI peer-center"
+}
+
+# Show network secret
+show_secret() {
+    clear
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   🔐 Network Secret Key" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+
+    if ! service_exists; then
+        print_color red "❌ Service does not exist"
+        press_key
+        return 1
+    fi
+
+    local secret=$(grep -oP '(?<=--network-secret )[^ ]+' "$SERVICE_FILE" 2>/dev/null)
+
+    if [[ -n "$secret" ]]; then
+        print_color green "🔑 Network Secret: ${BOLD}$secret"
+        echo ""
+        print_color yellow "⚠️  Keep this secret safe and share only with trusted nodes"
+    else
+        print_color red "❌ Network secret not found in configuration"
+    fi
+
+    echo ""
+    press_key
+}
+
+#############################################################################
+# WATCHDOG FUNCTIONS
+#############################################################################
+
+# Configure watchdog
+configure_watchdog() {
+    clear
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   🐕 Watchdog Configuration" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+
+    # Check watchdog status
+    if systemctl is-active --quiet "$WATCHDOG_SERVICE"; then
+        print_color green "✅ Watchdog is currently running" "${BOLD}"
+    else
+        print_color red "❌ Watchdog is not running" "${BOLD}"
+    fi
+
+    echo ""
+    print_color cyan "─────────────────────────────────────────"
+    echo ""
+    print_color green "1) Start/Configure Watchdog"
+    print_color red "2) Stop Watchdog"
+    print_color yellow "3) View Watchdog Logs"
+    print_color white "4) Back to Main Menu"
+    echo ""
+
+    read -rp "Select option [1-4]: " choice
+
+    case "$choice" in
+        1) start_watchdog ;;
+        2) stop_watchdog ;;
+        3) view_watchdog_logs ;;
+        4) return 0 ;;
+        *) print_color red "❌ Invalid option" && sleep 1 ;;
+    esac
+}
+
+# Start watchdog
+start_watchdog() {
+    clear
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   🐕 Start Watchdog Service" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+
+    if ! service_exists; then
+        print_color red "❌ EasyMesh service does not exist"
+        press_key
+        return 1
+    fi
+
+    print_color yellow "📖 Watchdog monitors network latency and restarts the service if needed"
+    print_color yellow "⚠️  Recommended to run on external (Kharej) servers only"
+    echo ""
+
+    # Get configuration
+    local monitor_ip latency_threshold check_interval
+
+    read -rp "🎯 IP address to monitor: " monitor_ip
+    if ! validate_ip "$monitor_ip"; then
+        print_color red "❌ Invalid IP address"
+        press_key
+        return 1
+    fi
+
+    read -rp "⏱️  Latency threshold in ms (default: 200): " latency_threshold
+    latency_threshold=${latency_threshold:-200}
+
+    read -rp "🔄 Check interval in seconds (default: 10): " check_interval
+    check_interval=${check_interval:-10}
+
+    # Stop existing watchdog
+    if systemctl is-active --quiet "$WATCHDOG_SERVICE"; then
+        systemctl stop "$WATCHDOG_SERVICE"
+    fi
+
+    # Create watchdog script
+    local watchdog_script="/opt/easytier/watchdog.sh"
+
+    cat > "$watchdog_script" <<'WATCHDOG_EOF'
+#!/bin/bash
+
+# Watchdog Configuration
+MONITOR_IP="REPLACE_IP"
+LATENCY_THRESHOLD=REPLACE_THRESHOLD
+CHECK_INTERVAL=REPLACE_INTERVAL
+SERVICE_NAME="easymesh.service"
+LOG_FILE="/var/log/easymesh-watchdog.log"
+
+# Maximum log file size (10MB)
+MAX_LOG_SIZE=$((10 * 1024 * 1024))
+
+# Rotate log if too large
+rotate_log() {
+    if [[ -f "$LOG_FILE" ]] && [[ $(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE") -gt $MAX_LOG_SIZE ]]; then
+        mv "$LOG_FILE" "${LOG_FILE}.old"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Log rotated" > "$LOG_FILE"
+    fi
+}
+
+# Log function
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+# Restart service
+restart_service() {
+    log_message "Restarting $SERVICE_NAME..."
+    if systemctl restart "$SERVICE_NAME"; then
+        log_message "Service restarted successfully"
+    else
+        log_message "ERROR: Failed to restart service"
+    fi
 }
 
 # Calculate average latency
-calculate_avg_latency() {
-    local latencies=$(ping -c 3 -W 2 -i 0.2 "$IP_ADDRESS" 2>/dev/null | grep 'time=' | sed -n 's/.*time=\([0-9.]*\) ms.*/\1/p')
+get_average_latency() {
+    local latencies=$(ping -c 3 -W 2 -i 0.2 "$MONITOR_IP" 2>/dev/null | grep 'time=' | sed -n 's/.*time=\([0-9.]*\).*/\1/p')
 
-    if [ -z "$latencies" ]; then
+    if [[ -z "$latencies" ]]; then
         echo "0"
         return
     fi
@@ -748,10 +897,10 @@ calculate_avg_latency() {
 
     while IFS= read -r latency; do
         total=$(echo "$total + $latency" | bc)
-        count=$((count + 1))
+        ((count++))
     done <<< "$latencies"
 
-    if [ $count -gt 0 ]; then
+    if [[ $count -gt 0 ]]; then
         echo "scale=2; $total / $count" | bc
     else
         echo "0"
@@ -759,359 +908,392 @@ calculate_avg_latency() {
 }
 
 # Main loop
+log_message "Watchdog started - Monitoring $MONITOR_IP (threshold: ${LATENCY_THRESHOLD}ms, interval: ${CHECK_INTERVAL}s)"
+
 while true; do
-    AVG_LATENCY=$(calculate_avg_latency)
+    rotate_log
 
-    if [ "$AVG_LATENCY" == "0" ] || [ -z "$AVG_LATENCY" ]; then
-        FAILURE_COUNT=$((FAILURE_COUNT + 1))
-        echo "$(date +"%Y-%m-%d %H:%M:%S"): Failed to ping $IP_ADDRESS (Failure $FAILURE_COUNT/$MAX_FAILURES)" >> "$LOG_FILE"
+    avg_latency=$(get_average_latency)
 
-        if [ $FAILURE_COUNT -ge $MAX_FAILURES ]; then
-            restart_service
-        fi
+    if [[ "$avg_latency" == "0" ]]; then
+        log_message "ALERT: Cannot ping $MONITOR_IP - Restarting service"
+        restart_service
     else
-        LATENCY_INT=${AVG_LATENCY%.*}
-        LATENCY_INT=${LATENCY_INT:-0}
+        latency_int=${avg_latency%.*}
 
-        if [ "$LATENCY_INT" -gt "$LATENCY_THRESHOLD" ]; then
-            FAILURE_COUNT=$((FAILURE_COUNT + 1))
-            echo "$(date +"%Y-%m-%d %H:%M:%S"): High latency ${AVG_LATENCY}ms > ${LATENCY_THRESHOLD}ms (Failure $FAILURE_COUNT/$MAX_FAILURES)" >> "$LOG_FILE"
-
-            if [ $FAILURE_COUNT -ge $MAX_FAILURES ]; then
-                restart_service
-            fi
+        if [[ $latency_int -gt $LATENCY_THRESHOLD ]]; then
+            log_message "ALERT: High latency detected (${avg_latency}ms > ${LATENCY_THRESHOLD}ms) - Restarting service"
+            restart_service
         else
-            # Reset counter on success
-            if [ $FAILURE_COUNT -gt 0 ]; then
-                echo "$(date +"%Y-%m-%d %H:%M:%S"): Connection recovered. Latency: ${AVG_LATENCY}ms" >> "$LOG_FILE"
-            fi
-            FAILURE_COUNT=0
+            log_message "OK: Latency ${avg_latency}ms (threshold: ${LATENCY_THRESHOLD}ms)"
         fi
     fi
 
     sleep "$CHECK_INTERVAL"
 done
-WATCHDOG_SCRIPT
+WATCHDOG_EOF
 
     # Replace placeholders
-    sed -i "s/IP_PLACEHOLDER/$IP_ADDRESS/g" /etc/monitor.sh
-    sed -i "s/LATENCY_PLACEHOLDER/$LATENCY_THRESHOLD/g" /etc/monitor.sh
-    sed -i "s/CHECK_PLACEHOLDER/$CHECK_INTERVAL/g" /etc/monitor.sh
-    sed -i "s/MAX_FAILURES_PLACEHOLDER/$MAX_FAILURES/g" /etc/monitor.sh
+    sed -i "s/REPLACE_IP/$monitor_ip/g" "$watchdog_script"
+    sed -i "s/REPLACE_THRESHOLD/$latency_threshold/g" "$watchdog_script"
+    sed -i "s/REPLACE_INTERVAL/$check_interval/g" "$watchdog_script"
 
-    chmod +x /etc/monitor.sh
-    touch /var/log/easymesh-watchdog.log
+    chmod +x "$watchdog_script"
 
-    echo
-    colorize yellow "Creating watchdog service..." bold
-
-cat > /etc/systemd/system/easymesh-watchdog.service <<EOF
+    # Create watchdog service
+    cat > "$WATCHDOG_FILE" <<EOF
 [Unit]
 Description=EasyMesh Watchdog Service
-After=network-online.target easymesh.service
+Documentation=https://github.com/Musixal/easy-mesh
+After=network-online.target ${SERVICE_NAME}
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash /etc/monitor.sh
+ExecStart=/bin/bash ${watchdog_script}
 Restart=always
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=easymesh-watchdog
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+    # Start watchdog
     systemctl daemon-reload
-    systemctl enable --now easymesh-watchdog.service
 
-    sleep 2
-
-    if systemctl is-active --quiet easymesh-watchdog.service; then
-        echo
-        colorize green "✓ Watchdog service started successfully!" bold
-        echo "  - Monitoring IP: $IP_ADDRESS"
-        echo "  - Latency threshold: ${LATENCY_THRESHOLD}ms"
-        echo "  - Check interval: ${CHECK_INTERVAL}s"
-        echo "  - Max failures: $MAX_FAILURES"
-        echo "  - Log file: /var/log/easymesh-watchdog.log"
+    if systemctl enable --now "$WATCHDOG_SERVICE" &>/dev/null; then
+        print_color green "✅ Watchdog started successfully" "${BOLD}"
+        echo ""
+        print_color cyan "  Monitor IP: $monitor_ip"
+        print_color cyan "  Latency Threshold: ${latency_threshold}ms"
+        print_color cyan "  Check Interval: ${check_interval}s"
+        log "INFO" "Watchdog started: monitoring $monitor_ip"
     else
-        colorize red "✗ Failed to start watchdog service" bold
+        print_color red "❌ Failed to start watchdog"
+        log "ERROR" "Failed to start watchdog"
     fi
 
-    echo
+    echo ""
     press_key
 }
 
+# Stop watchdog
 stop_watchdog() {
-    echo
-    SERVICE_FILE="/etc/systemd/system/easymesh-watchdog.service"
+    echo ""
 
-    if [[ ! -f $SERVICE_FILE ]]; then
-        colorize red "Watchdog service does not exist." bold
-        sleep 1
-        return 1
+    if ! systemctl is-active --quiet "$WATCHDOG_SERVICE"; then
+        print_color yellow "⚠️  Watchdog is not running"
+        sleep 2
+        return 0
     fi
 
-    systemctl disable --now easymesh-watchdog.service &> /dev/null
-    rm -f /etc/monitor.sh /var/log/easymesh-watchdog.log* &> /dev/null
-    rm -f "$SERVICE_FILE" &> /dev/null
-    systemctl daemon-reload &> /dev/null
+    print_color yellow "⏸️  Stopping watchdog..."
 
-    colorize green "✓ Watchdog service stopped and removed" bold
-    echo
+    systemctl stop "$WATCHDOG_SERVICE"
+    systemctl disable "$WATCHDOG_SERVICE" &>/dev/null
+    rm -f "$WATCHDOG_FILE" /opt/easytier/watchdog.sh
+    systemctl daemon-reload
+
+    print_color green "✅ Watchdog stopped and removed" "${BOLD}"
+    log "INFO" "Watchdog stopped"
+
     sleep 2
 }
 
-view_watchdog_status() {
-    if systemctl is-active --quiet "easymesh-watchdog.service"; then
-        colorize green "    Watchdog service is running" bold
-    else
-        colorize red "    Watchdog service is not running" bold
-    fi
-}
+# View watchdog logs
+view_watchdog_logs() {
+    clear
 
-view_logs() {
-    if [ -f /var/log/easymesh-watchdog.log ]; then
-        less +G /var/log/easymesh-watchdog.log
+    if [[ -f /var/log/easymesh-watchdog.log ]]; then
+        print_color cyan "═══════════════════════════════════════" "${BOLD}"
+        print_color cyan "   📋 Watchdog Logs" "${BOLD}"
+        print_color cyan "═══════════════════════════════════════" "${BOLD}"
+        echo ""
+        tail -f /var/log/easymesh-watchdog.log
     else
-        echo ''
-        colorize yellow "No logs found.\n" bold
+        print_color yellow "⚠️  No watchdog logs found"
         press_key
     fi
 }
 
-# Improved cron job with faster recovery
-add_cron_job() {
-    echo
-    local service_name="easymesh.service"
+#############################################################################
+# CRON JOB MANAGEMENT
+#############################################################################
 
-    colorize cyan "Fast Recovery Cron Job Setup" bold
-    echo
-    colorize yellow "This will restart the service at regular intervals.
-For network stability issues, shorter intervals are recommended." bold
-    echo
-    echo "1. Every 5 minutes (Fastest recovery)"
-    echo "2. Every 10 minutes"
-    echo "3. Every 15 minutes"
-    echo "4. Every 30 minutes"
-    echo "5. Every 1 hour"
-    echo "6. Every 2 hours"
-    echo "7. Every 4 hours"
-    echo "8. Every 6 hours"
-    echo
-    read -p "Enter your choice (1-8): " time_choice
+# Configure cron job
+configure_cronjob() {
+    clear
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   ⏰ Cron Job Configuration" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
 
-    case $time_choice in
-        1) restart_time="*/5 * * * *" ;;
-        2) restart_time="*/10 * * * *" ;;
-        3) restart_time="*/15 * * * *" ;;
-        4) restart_time="*/30 * * * *" ;;
-        5) restart_time="0 * * * *" ;;
-        6) restart_time="0 */2 * * *" ;;
-        7) restart_time="0 */4 * * *" ;;
-        8) restart_time="0 */6 * * *" ;;
+    print_color green "1) Add Cron Job"
+    print_color red "2) Remove Cron Job"
+    print_color white "3) Back to Main Menu"
+    echo ""
+
+    read -rp "Select option [1-3]: " choice
+
+    case "$choice" in
+        1) add_cronjob ;;
+        2) remove_cronjob ;;
+        3) return 0 ;;
+        *) print_color red "❌ Invalid option" && sleep 1 ;;
+    esac
+}
+
+# Add cron job
+add_cronjob() {
+    clear
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   ⏰ Add Cron Job" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+
+    if ! service_exists; then
+        print_color red "❌ EasyMesh service does not exist"
+        press_key
+        return 1
+    fi
+
+    print_color yellow "Select restart interval:"
+    echo ""
+    echo "  1) Every 30 minutes"
+    echo "  2) Every 1 hour"
+    echo "  3) Every 2 hours"
+    echo "  4) Every 4 hours"
+    echo "  5) Every 6 hours"
+    echo "  6) Every 12 hours"
+    echo "  7) Every 24 hours"
+    echo ""
+
+    read -rp "Select option [1-7]: " interval_choice
+
+    local cron_schedule
+    case "$interval_choice" in
+        1) cron_schedule="*/30 * * * *" ;;
+        2) cron_schedule="0 * * * *" ;;
+        3) cron_schedule="0 */2 * * *" ;;
+        4) cron_schedule="0 */4 * * *" ;;
+        5) cron_schedule="0 */6 * * *" ;;
+        6) cron_schedule="0 */12 * * *" ;;
+        7) cron_schedule="0 0 * * *" ;;
         *)
-            colorize red "Invalid choice.\n"
-            sleep 2
+            print_color red "❌ Invalid option"
+            press_key
             return 1
             ;;
     esac
 
-    delete_cron_job > /dev/null 2>&1
+    # Remove existing cron job
+    remove_cronjob &>/dev/null
 
-    local reset_path="/root/easytier/reset.sh"
-    mkdir -p /root/easytier
+    # Create restart script
+    local restart_script="/opt/easytier/restart.sh"
 
-cat << 'RESET_SCRIPT' > "$reset_path"
+    cat > "$restart_script" <<'EOF'
 #!/bin/bash
-# Fast reset script for EasyMesh
+# EasyMesh Auto-Restart Script
+LOG_FILE="/var/log/easymesh-cron.log"
 
-# Kill all easytier processes
-pkill -9 -f easytier-core 2>/dev/null
-sleep 2
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Scheduled restart initiated" >> "$LOG_FILE"
 
-# Reload and restart service
+# Kill any hanging processes
+pkill -9 easytier-core 2>/dev/null
+
+# Restart service
 systemctl daemon-reload
 systemctl restart easymesh.service
 
-# Log the restart
-echo "$(date): Service restarted by cron" >> /var/log/easymesh-cron.log
-
-# Keep log file under 1MB
-if [ -f /var/log/easymesh-cron.log ]; then
-    size=$(stat -c%s /var/log/easymesh-cron.log 2>/dev/null || echo 0)
-    if [ "$size" -gt 1048576 ]; then
-        tail -n 100 /var/log/easymesh-cron.log > /var/log/easymesh-cron.log.tmp
-        mv /var/log/easymesh-cron.log.tmp /var/log/easymesh-cron.log
-    fi
+if systemctl is-active --quiet easymesh.service; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Service restarted successfully" >> "$LOG_FILE"
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - ERROR: Service failed to restart" >> "$LOG_FILE"
 fi
-RESET_SCRIPT
+EOF
 
-    chmod +x "$reset_path"
+    chmod +x "$restart_script"
 
     # Add to crontab
-    (crontab -l 2>/dev/null | grep -v "#$service_name"; echo "$restart_time $reset_path #$service_name") | crontab -
+    (crontab -l 2>/dev/null | grep -v "#easymesh-restart"; echo "$cron_schedule $restart_script #easymesh-restart") | crontab -
 
-    echo
-    colorize green "✓ Cron job added successfully!" bold
-    echo "  - Schedule: $restart_time"
-    echo "  - Script: $reset_path"
-    echo "  - Log: /var/log/easymesh-cron.log"
-    echo
-    sleep 2
+    print_color green "✅ Cron job added successfully" "${BOLD}"
+    echo ""
+    print_color cyan "  Schedule: $cron_schedule"
+    print_color cyan "  Script: $restart_script"
+    log "INFO" "Cron job added: $cron_schedule"
+
+    echo ""
+    press_key
 }
 
-delete_cron_job() {
-    echo
-    local service_name="easymesh.service"
-    local reset_path="/root/easytier/reset.sh"
+# Remove cron job
+remove_cronjob() {
+    echo ""
 
-    crontab -l 2>/dev/null | grep -v "#$service_name" | crontab - 2>/dev/null
-    rm -f "$reset_path" /var/log/easymesh-cron.log* >/dev/null 2>&1
-
-    colorize green "✓ Cron job deleted successfully." bold
-    sleep 2
-}
-
-set_cronjob() {
-    clear
-    colorize cyan "Cron-job Setting Menu" bold
-    echo
-
-    # Show current cron status
-    if crontab -l 2>/dev/null | grep -q "#easymesh.service"; then
-        colorize green "Current Status: Cron job is active" bold
-        echo "Schedule: $(crontab -l 2>/dev/null | grep '#easymesh.service' | awk '{print $1, $2, $3, $4, $5}')"
-    else
-        colorize yellow "Current Status: No cron job configured" bold
-    fi
-
-    echo
-    echo "---------------------------------------------"
-    echo
-    colorize green "1) Add/Update cron job"
-    colorize red "2) Delete cron job"
-    colorize yellow "3) View cron log"
-    colorize reset "4) Return"
-
-    echo
-    echo -ne "Select your option [1-4]: "
-    read -r choice
-
-    case $choice in
-        1) add_cron_job ;;
-        2) delete_cron_job ;;
-        3)
-            if [ -f /var/log/easymesh-cron.log ]; then
-                less +G /var/log/easymesh-cron.log
-            else
-                colorize yellow "No cron log found.\n"
-                press_key
-            fi
-            ;;
-        4) return 0 ;;
-        *) colorize red "Invalid option!" && sleep 1 && return 1 ;;
-    esac
-}
-
-check_core_status() {
-    DEST_DIR="/root/easytier"
-    FILE1="easytier-core"
-    FILE2="easytier-cli"
-
-    if [ -f "$DEST_DIR/$FILE1" ] && [ -f "$DEST_DIR/$FILE2" ]; then
-        colorize green "Core v1.2.0 Installed" bold
-        return 0
-    else
-        colorize red "Core Not Found" bold
-        return 1
-    fi
-}
-
-remove_easymesh_core() {
-    echo
-
-    if [[ ! -d '/root/easytier' ]]; then
-        colorize red "    EasyMesh directory not found." bold
+    if ! crontab -l 2>/dev/null | grep -q "#easymesh-restart"; then
+        print_color yellow "⚠️  No cron job found"
         sleep 2
-        return 1
+        return 0
     fi
 
-    # Kill processes first
-    kill_easytier_processes
+    crontab -l 2>/dev/null | grep -v "#easymesh-restart" | crontab -
+    rm -f /opt/easytier/restart.sh
 
-    # Remove directory
-    rm -rf /root/easytier &> /dev/null
+    print_color green "✅ Cron job removed successfully" "${BOLD}"
+    log "INFO" "Cron job removed"
 
-    colorize green "    ✓ Easymesh core deleted successfully." bold
     sleep 2
 }
 
-display_menu() {
-    clear
-    echo -e "   ${CYAN}╔════════════════════════════════════════╗"
-    echo -e "   ║            🌐 ${WHITE}EasyMesh                 ${CYAN}║"
-    echo -e "   ║        ${WHITE}VPN Network Solution            ${CYAN}║"
-    echo -e "   ╠════════════════════════════════════════╣"
-    echo -e "   ║  ${WHITE}Version: 1.2.0 (Stable - Fixed)       ${CYAN}║"
-    echo -e "   ║  ${WHITE}Telegram: @Gozar_Xray                 ${CYAN}║"
-    echo -e "   ║  ${WHITE}GitHub: Musixal/easy-mesh             ${CYAN}║"
-    echo -e "   ╠════════════════════════════════════════╣${RESET}"
-    echo -e "   ║        $(check_core_status)         ║"
+#############################################################################
+# MAIN MENU
+#############################################################################
 
-    # Show service status
-    if systemctl is-active --quiet easymesh.service 2>/dev/null; then
-        echo -e "   ║        ${GREEN}Service: Running ✓${RESET}                ║"
+# Display header
+display_header() {
+    clear
+    echo -e "${CYAN}╔════════════════════════════════════════════════╗${RESET}"
+    echo -e "${CYAN}║${WHITE}              🌐 EasyMesh Manager              ${CYAN}║${RESET}"
+    echo -e "${CYAN}║${WHITE}        Professional VPN Network Solution      ${CYAN}║${RESET}"
+    echo -e "${CYAN}╠════════════════════════════════════════════════╣${RESET}"
+    echo -e "${CYAN}║${WHITE}  Version: ${SCRIPT_VERSION}                                 ${CYAN}║${RESET}"
+    echo -e "${CYAN}║${WHITE}  EasyTier: ${EASYTIER_VERSION}                              ${CYAN}║${RESET}"
+    echo -e "${CYAN}║${WHITE}  Telegram: @Gozar_Xray                         ${CYAN}║${RESET}"
+    echo -e "${CYAN}║${WHITE}  GitHub: github.com/Musixal/easy-mesh         ${CYAN}║${RESET}"
+    echo -e "${CYAN}╠════════════════════════════════════════════════╣${RESET}"
+
+    # Status indicators
+    if core_installed; then
+        echo -e "${CYAN}║${GREEN}  ✅ Core: Installed                             ${CYAN}║${RESET}"
     else
-        echo -e "   ║        ${RED}Service: Stopped ✗${RESET}                ║"
+        echo -e "${CYAN}║${RED}  ❌ Core: Not Installed                         ${CYAN}║${RESET}"
     fi
 
-    echo -e "   ╚════════════════════════════════════════╝"
+    if service_exists; then
+        if systemctl is-active --quiet "$SERVICE_NAME"; then
+            echo -e "${CYAN}║${GREEN}  ✅ Service: Running                            ${CYAN}║${RESET}"
+        else
+            echo -e "${CYAN}║${YELLOW}  ⚠️  Service: Stopped                            ${CYAN}║${RESET}"
+        fi
+    else
+        echo -e "${CYAN}║${RED}  ❌ Service: Not Configured                     ${CYAN}║${RESET}"
+    fi
 
-    echo ''
-    colorize green "    [1] Connect to Mesh Network" bold
-    colorize yellow "    [2] Display Peers"
-    colorize cyan "    [3] Display Routes"
-    colorize reset "    [4] Peer-Center"
-    colorize reset "    [5] Display Secret Key"
-    colorize reset "    [6] View Service Status & Logs"
-    colorize reset "    [7] Set Watchdog [Auto-Restarter]"
-    colorize reset "    [8] Cron-job Setting [Fast Recovery]"
-    colorize yellow "    [9] Restart Service"
-    colorize red "    [10] Remove Service"
-    colorize magenta "    [11] Remove Core"
+    if systemctl is-active --quiet "$WATCHDOG_SERVICE"; then
+        echo -e "${CYAN}║${GREEN}  ✅ Watchdog: Active                            ${CYAN}║${RESET}"
+    else
+        echo -e "${CYAN}║${WHITE}  ⚪ Watchdog: Inactive                           ${CYAN}║${RESET}"
+    fi
 
-    echo -e "    [0] Exit"
-    echo ''
+    echo -e "${CYAN}╚════════════════════════════════════════════════╝${RESET}"
+    echo ""
 }
 
-read_option() {
-    echo -e "\t-------------------------------"
-    echo -en "\t${MAGENTA}\033[1mEnter your choice:${RESET} "
-    read -p '' choice
-    case $choice in
-        1) connect_network_pool ;;
-        2) display_peers ;;
-        3) display_routes ;;
-        4) peer_center ;;
-        5) show_network_secret ;;
-        6) view_service_status ;;
-        7) set_watchdog ;;
-        8) set_cronjob ;;
-        9) restart_easymesh_service ;;
-        10) remove_easymesh_service ;;
-        11) remove_easymesh_core ;;
-        0)
-            colorize green "Thank you for using EasyMesh!" bold
-            exit 0
-            ;;
-        *) colorize red "    Invalid option!" bold && sleep 1 ;;
-    esac
+# Display menu
+display_menu() {
+    display_header
+
+    print_color green "  ${BOLD}📦 Installation & Setup${RESET}"
+    echo "    [1] Install/Update EasyTier Core"
+    echo "    [2] Configure Network"
+    echo ""
+
+    print_color yellow "  ${BOLD}📊 Monitoring${RESET}"
+    echo "    [3] Display Peers"
+    echo "    [4] Display Routes"
+    echo "    [5] Display Peer Center"
+    echo "    [6] Show Network Secret"
+    echo ""
+
+    print_color cyan "  ${BOLD}⚙️  Service Management${RESET}"
+    echo "    [7] View Service Status"
+    echo "    [8] Restart Service"
+    echo "    [9] Remove Service"
+    echo ""
+
+    print_color magenta "  ${BOLD}🔧 Advanced${RESET}"
+    echo "    [10] Configure Watchdog"
+    echo "    [11] Configure Cron Job"
+    echo "    [12] View System Logs"
+    echo ""
+
+    print_color red "  ${BOLD}🗑️  Removal${RESET}"
+    echo "    [13] Remove Core"
+    echo ""
+
+    echo "    [0] Exit"
+    echo ""
 }
 
-# Main script
-while true
-do
-    display_menu
-    read_option
-done
+# View system logs
+view_system_logs() {
+    clear
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    print_color cyan "   📋 System Logs" "${BOLD}"
+    print_color cyan "═══════════════════════════════════════" "${BOLD}"
+    echo ""
+
+    if ! service_exists; then
+        print_color red "❌ Service does not exist"
+        press_key
+        return 1
+    fi
+
+    print_color yellow "Showing last 50 log entries (Press Ctrl+C to exit)..."
+    echo ""
+
+    journalctl -u "$SERVICE_NAME" -f -n 50
+}
+
+# Main loop
+main() {
+    # Initialize
+    check_root
+    install_dependencies
+
+    # Create log file
+    touch "$LOG_FILE" 2>/dev/null || true
+
+    log "INFO" "EasyMesh Manager started (v${SCRIPT_VERSION})"
+
+    while true; do
+        display_menu
+
+        echo -ne "  ${MAGENTA}${BOLD}Enter your choice [0-13]: ${RESET}"
+        read -r choice
+
+        case "$choice" in
+            1) install_core ;;
+            2) configure_network ;;
+            3) display_peers ;;
+            4) display_routes ;;
+            5) display_peer_center ;;
+            6) show_secret ;;
+            7) view_status ;;
+            8) restart_service ;;
+            9) remove_service ;;
+            10) configure_watchdog ;;
+            11) configure_cronjob ;;
+            12) view_system_logs ;;
+            13) remove_core ;;
+            0)
+                clear
+                print_color green "👋 Thank you for using EasyMesh Manager!" "${BOLD}"
+                log "INFO" "EasyMesh Manager exited"
+                exit 0
+                ;;
+            *)
+                print_color red "❌ Invalid option. Please select 0-13" "${BOLD}"
+                sleep 2
+                ;;
+        esac
+    done
+}
+
+# Run main function
+main "$@"
