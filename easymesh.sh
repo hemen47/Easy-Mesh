@@ -181,6 +181,17 @@ validate_ipv4() {
     return 1
 }
 
+# Check if IP is private
+is_private_ip() {
+    local ip=$1
+    if [[ $ip =~ ^10\. ]] || \
+       [[ $ip =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] || \
+       [[ $ip =~ ^192\.168\. ]]; then
+        return 0
+    fi
+    return 1
+}
+
 #Var
 EASY_CLIENT='/root/easytier/easytier-cli'
 SERVICE_FILE="/etc/systemd/system/easymesh.service"
@@ -189,28 +200,59 @@ connect_network_pool(){
     clear
     colorize cyan "Connect to the Mesh Network (v1.2.0)" bold
     echo
-    colorize yellow "Tips for stable connection:
-- Leave peer addresses blank for reverse mode
-- UDP mode is more stable than TCP
-- Disable multi-thread if experiencing instability
-- Use strong network secrets (min 12 characters)
+    colorize yellow "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+IMPORTANT CONFIGURATION GUIDE:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. LOCAL IP must be PRIVATE (10.x.x.x, 172.16-31.x.x, 192.168.x.x)
+   - This is your MESH network IP (NOT your server's public IP)
+
+2. PEER ADDRESSES should be PUBLIC IPs of other servers
+   - Leave BLANK if this is the main server (reverse mode)
+
+3. All servers must use the SAME network secret
+
+EXAMPLE SETUP:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Server 1 (Kharej - Public IP: 198.245.214.80):
+  - Peer: (leave blank)
+  - Local IP: 10.144.144.1 ← PRIVATE mesh IP
+
+Server 2 (Iran - Public IP: 185.x.x.x):
+  - Peer: 198.245.214.80 ← Kharej's PUBLIC IP
+  - Local IP: 10.144.144.2 ← PRIVATE mesh IP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 "
     echo
 
-    read -p "[-] Enter Peer IPv4/IPv6 Addresses (comma separated, blank for reverse): " PEER_ADDRESSES
+    read -p "[-] Enter Peer PUBLIC IPv4/IPv6 (comma separated, blank for reverse): " PEER_ADDRESSES
 
-    # Validate local IP
+    # Validate local IP with private IP check
     while true; do
-        read -p "[*] Enter Local IPv4 Address (e.g., 10.144.144.1): " IP_ADDRESS
+        read -p "[*] Enter Local PRIVATE IPv4 (e.g., 10.144.144.1): " IP_ADDRESS
         if [ -z "$IP_ADDRESS" ]; then
             colorize red "IP address cannot be empty.\n"
             continue
         fi
-        if validate_ipv4 "$IP_ADDRESS"; then
-            break
-        else
+        if ! validate_ipv4 "$IP_ADDRESS"; then
             colorize red "Invalid IPv4 address format.\n"
+            continue
         fi
+        if ! is_private_ip "$IP_ADDRESS"; then
+            colorize red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            colorize red "ERROR: Local IP must be PRIVATE!" bold
+            colorize yellow "You entered: $IP_ADDRESS (This looks like a PUBLIC IP)"
+            echo ""
+            colorize cyan "Private IP ranges:" bold
+            echo "  - 10.0.0.0 to 10.255.255.255"
+            echo "  - 172.16.0.0 to 172.31.255.255"
+            echo "  - 192.168.0.0 to 192.168.255.255"
+            echo ""
+            colorize yellow "Your server's PUBLIC IP should only be used in PEER addresses!"
+            colorize red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            continue
+        fi
+        break
     done
 
     # Validate hostname
@@ -381,7 +423,7 @@ User=root
 WorkingDirectory=/root/easytier
 ExecStartPre=/bin/sleep 2
 ExecStartPre=/bin/bash -c 'pkill -9 -f easytier-core || true'
-ExecStart=/root/easytier/easytier-core -i $IP_ADDRESS $PEER_ADDRESS --hostname $HOSTNAME --network-secret $NETWORK_SECRET --default-protocol $DEFAULT_PROTOCOL $LISTENERS $MULTI_THREAD $ENCRYPTION_OPTION $IPV6_MODE
+ExecStart=/root/easytier/easytier-core --ipv4 $IP_ADDRESS $PEER_ADDRESS --hostname $HOSTNAME --network-name default --network-secret $NETWORK_SECRET $LISTENERS $MULTI_THREAD $ENCRYPTION_OPTION $IPV6_MODE
 Restart=always
 RestartSec=5
 StartLimitInterval=0
@@ -406,16 +448,34 @@ EOF
     # Wait and verify service started
     sleep 3
     if systemctl is-active --quiet easymesh.service; then
-        colorize green "\n✓ EasyMesh Network Service Started Successfully!\n" bold
+        colorize green "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" bold
+        colorize green "✓ EasyMesh Network Service Started Successfully!" bold
+        colorize green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" bold
         echo "Configuration Summary:"
-        echo "  - Local IP: $IP_ADDRESS"
+        echo "  - Local Mesh IP: $IP_ADDRESS"
         echo "  - Hostname: $HOSTNAME"
         echo "  - Protocol: $DEFAULT_PROTOCOL"
         echo "  - Port: $PORT"
-        echo "  - Peers: ${JOINED_ADDRESSES:-None (Reverse Mode)}"
+        echo "  - Network Secret: $NETWORK_SECRET"
+        if [ -n "$JOINED_ADDRESSES" ]; then
+            echo "  - Peers: ${JOINED_ADDRESSES}"
+        else
+            echo "  - Mode: Reverse (waiting for connections)"
+        fi
+        colorize green "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" bold
     else
-        colorize red "\n✗ Failed to start EasyMesh service\n" bold
-        colorize yellow "Check logs: sudo journalctl -u easymesh.service -n 50\n"
+        colorize red "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" bold
+        colorize red "✗ Failed to start EasyMesh service" bold
+        colorize red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" bold
+        colorize yellow "Error Details:\n"
+        journalctl -u easymesh.service -n 30 --no-pager
+        echo ""
+        colorize yellow "Common Solutions:" bold
+        echo "1. Check if port $PORT is available: sudo ss -tuln | grep $PORT"
+        echo "2. Verify easytier-core exists: ls -la /root/easytier/"
+        echo "3. Test manual start: sudo /root/easytier/easytier-core --help"
+        echo "4. Check firewall: sudo ufw status"
+        colorize red "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" bold
     fi
 
     press_key
@@ -577,7 +637,7 @@ view_service_status() {
     echo "=== Recent Logs (last 30 lines) ==="
     sudo journalctl -u easymesh.service -n 30 --no-pager
     echo ""
-    colorize cyan "Press 'q' to return to menu"
+    colorize cyan "Press Enter to return to menu"
     read -p ""
 }
 
@@ -1009,16 +1069,16 @@ display_menu() {
     echo -e "   ╚════════════════════════════════════════╝"
 
     echo ''
-    colorize green "    [[1]](#__1) Connect to Mesh Network" bold
-    colorize yellow "    [[2]](#__2) Display Peers"
-    colorize cyan "    [[3]](#__3) Display Routes"
-    colorize reset "    [[4]](#__4) Peer-Center"
-    colorize reset "    [[5]](#__5) Display Secret Key"
-    colorize reset "    [[6]](#__6) View Service Status & Logs"
-    colorize reset "    [[7]](#__7) Set Watchdog [Auto-Restarter]"
-    colorize reset "    [[8]](#__8) Cron-job Setting [Fast Recovery]"
-    colorize yellow "    [[9]](#__9) Restart Service"
-    colorize red "    [[10]](#__10) Remove Service"
+    colorize green "    [1] Connect to Mesh Network" bold
+    colorize yellow "    [2] Display Peers"
+    colorize cyan "    [3] Display Routes"
+    colorize reset "    [4] Peer-Center"
+    colorize reset "    [5] Display Secret Key"
+    colorize reset "    [6] View Service Status & Logs"
+    colorize reset "    [7] Set Watchdog [Auto-Restarter]"
+    colorize reset "    [8] Cron-job Setting [Fast Recovery]"
+    colorize yellow "    [9] Restart Service"
+    colorize red "    [10] Remove Service"
     colorize magenta "    [11] Remove Core"
 
     echo -e "    [0] Exit"
