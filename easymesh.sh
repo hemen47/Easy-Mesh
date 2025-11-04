@@ -429,14 +429,13 @@ configure_network() {
     cmd_options+=" --network-secret $network_secret"
     cmd_options+=" --default-protocol $protocol"
 
-    # Add listeners
-    cmd_options+=" --listeners ${protocol}://0.0.0.0:${port}"
-if [[ "$enable_ipv6" =~ ^[Yy]$ ]]; then
-    cmd_options+=" --listeners ${protocol}://[::]:${port} ${protocol}://0.0.0.0:${port}"
-else
-    cmd_options+=" --listeners ${protocol}://0.0.0.0:${port}"
-    cmd_options+=" --disable-ipv6"
-fi
+    # Add listeners - FIXED VERSION
+    if [[ "$enable_ipv6" =~ ^[Yy]$ ]]; then
+        cmd_options+=" --listeners ${protocol}://[::]:${port} ${protocol}://0.0.0.0:${port}"
+    else
+        cmd_options+=" --listeners ${protocol}://0.0.0.0:${port}"
+        cmd_options+=" --disable-ipv6"
+    fi
 
     # Add peer addresses
     if [[ -n "$peer_addresses" ]]; then
@@ -462,6 +461,9 @@ fi
     if [[ "$enable_multi_thread" =~ ^[Yy]$ ]]; then
         cmd_options+=" --multi-thread"
     fi
+
+    # Add RPC portal - CRITICAL FIX
+    cmd_options+=" --rpc-portal 127.0.0.1:15888"
 
     # Create systemd service
     create_service "$cmd_options"
