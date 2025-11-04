@@ -431,11 +431,12 @@ configure_network() {
 
     # Add listeners
     cmd_options+=" --listeners ${protocol}://0.0.0.0:${port}"
-    if [[ "$enable_ipv6" =~ ^[Yy]$ ]]; then
-        cmd_options+=" ${protocol}://[::]:${port}"
-    else
-        cmd_options+=" --disable-ipv6"
-    fi
+if [[ "$enable_ipv6" =~ ^[Yy]$ ]]; then
+    cmd_options+=" --listeners ${protocol}://[::]:${port} ${protocol}://0.0.0.0:${port}"
+else
+    cmd_options+=" --listeners ${protocol}://0.0.0.0:${port}"
+    cmd_options+=" --disable-ipv6"
+fi
 
     # Add peer addresses
     if [[ -n "$peer_addresses" ]]; then
