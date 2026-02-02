@@ -693,103 +693,119 @@ configure_network() {
     read -rp "🛡️  Enable peer whitelist? (Restrict connections) (y/N): " enable_whitelist
     enable_whitelist=${enable_whitelist:-no}
 
-    # Build command options with security hardening
-    local cmd_options="--ipv4 $ipv4_address"
-    cmd_options+=" --hostname $hostname"
-    cmd_options+=" --network-name $network_name"
-    cmd_options+=" --network-secret $network_secret"
-    cmd_options+=" --default-protocol $protocol"
+   # Build command options with security hardening
+      local cmd_options="--ipv4 $ipv4_address"
+      cmd_options+=" --hostname $hostname"
+      cmd_options+=" --network-name $network_name"
+      cmd_options+=" --network-secret $network_secret"
+      cmd_options+=" --default-protocol $protocol"
 
-    # Add listeners with proper binding
-if [[ "$enable_ipv6" =~ ^[Yy]$ ]]; then
-    print_color cyan "  IPv6: Enabled"
-else
-    print_color cyan "  IPv6: Disabled"
-fi
+      # Add listeners with proper binding
+      if [[ "$enable_ipv6" =~ ^[Yy]$ ]]; then
+          cmd_options+=" --listeners ${protocol}://[::]:${port} ${protocol}://0.0.0.0:${port}"
+      else
+          cmd_options+=" --listeners ${protocol}://0.0.0.0:${port}"
+          cmd_options+=" --disable-ipv6"
+      fi
 
-    # Add peer addresses with protocol prefix
-    if [[ -n "$peer_addresses" ]]; then
-        IFS=',' read -ra peers <<< "$peer_addresses"
-        for peer in "${peers[@]}"; do
-            peer=$(echo "$peer" | xargs)
-            if [[ -n "$peer" ]]; then
-                # Handle IPv6 addresses
-                if [[ "$peer" == *:*:* ]] && [[ "$peer" != \[*\] ]]; then
-                    peer="[$peer]"
-                fi
-                # Add protocol if not present
-                if [[ ! "$peer" =~ ^[a-z]+:// ]]; then
-                    cmd_options+=" --peers ${protocol}://${peer}:${port}"
-                else
-                    cmd_options+=" --peers ${peer}"
-                fi
-            fi
-        done
-    fi
+      # Add peer addresses with protocol prefix
+      if [[ -n "$peer_addresses" ]]; then
+          IFS=',' read -ra peers <<< "$peer_addresses"
+          for peer in "${peers[@]}"; do
+              peer=$(echo "$peer" | xargs)
+              if [[ -n "$peer" ]]; then
+                  # Handle IPv6 addresses
+                  if [[ "$peer" == *:*:* ]] && [[ "$peer" != \[*\] ]]; then
+                      peer="[$peer]"
+                  fi
+                  # Add protocol if not present
+                  if [[ ! "$peer" =~ ^[a-z]+:// ]]; then
+                      cmd_options+=" --peers ${protocol}://${peer}:${port}"
+                  else
+                      cmd_options+=" --peers ${peer}"
+                  fi
+              fi
+          done
+      fi
 
+      # Multi-thread option
+      if [[ "$enable_multi_thread" =~ ^[Yy]$ ]]; then
+          cmd_options+=" --multi-thread"
+      fi
 
+      # RPC portal - CRITICAL for CLI communication
+      cmd_options+=" --rpc-portal 127.0.0.1:15888"
 
-    # Multi-thread option
-if [[ "$enable_multi_thread" =~ ^[Yy]$ ]]; then
-    print_color cyan "  Multi-thread: Enabled"
-else
-    print_color cyan "  Multi-thread: Disabled"
-fi
+      # Connection stability options
+      cmd_options+=" --latency-first"
+      cmd_options+=" --mtu 1400"
 
-    # RPC portal - CRITICAL for CLI communication
-    cmd_options+=" --rpc-portal 127.0.0.1:15888"
+      # Stealth mode enhancements
+      if [[ "$stealth_mode" =~ ^[Yy]$ ]]; then
+          cmd_options+=" --console-log-level error"
+          cmd_options+=" --disable-p2p"  # Force relay for stealth
+          log "SECURITY" "Stealth mode enabled"
+      else
+          # Logging level for non-stealth
+          cmd_options+=" --console-log-level info"
+      fi
 
-    # Connection stability options
-    cmd_options+=" --latency-first"
-    cmd_options+=" --enable-udp-hole-punch"
-    cmd_options+=" --mtu 1400"
+      # Peer whitelist
+      if [[ "$enable_whitelist" =~ ^[Yy]$ ]] && [[ -n "$peer_addresses" ]]; then
+          cmd_options+=" --enable-whitelist"
+          log "SECURITY" "Peer whitelist enabled"
+      fi
 
-    # Stealth mode enhancements
-if [[ "$stealth_mode" =~ ^[Yy]$ ]]; then
-    print_color cyan "  Stealth Mode: Enabled"
-else
-    print_color cyan "  Stealth Mode: Disabled"
-fi
+      # Create systemd service with hardening
+      create_secure_service "$cmd_options"
 
-    # Logging level
-    cmd_options+=" --console-log-level info"
+      # Start service
+      start_service
 
-    # Peer whitelist
-if [[ "$enable_whitelist" =~ ^[Yy]$ ]]; then
-    print_color cyan "  Peer Whitelist: Enabled"
-else
-    print_color cyan "  Peer Whitelist: Disabled"
-fi
+      # Display configuration summary
+      echo ""
+      print_color green "═══════════════════════════════════════" "${BOLD}"
+      print_color green "   ✅ Secure Configuration Summary" "${BOLD}"
+      print_color green "═══════════════════════════════════════" "${BOLD}"
+      echo ""
+      print_color cyan "  IPv4 Address: $ipv4_address"
+      print_color cyan "  Hostname: $hostname"
+      print_color cyan "  Network Name: $network_name"
+      print_color cyan "  Network Secret: [SECURED - stored in ${SECURE_CONFIG_DIR}/network.secret]"
+      print_color cyan "  Protocol: $protocol"
+      print_color cyan "  Port: $port"
+      print_color cyan "  Encryption: AES-256-GCM (Enabled by default)"
 
-    # Create systemd service with hardening
-    create_secure_service "$cmd_options"
+      if [[ "$enable_ipv6" =~ ^[Yy]$ ]]; then
+          print_color cyan "  IPv6: Enabled"
+      else
+          print_color cyan "  IPv6: Disabled"
+      fi
 
-    # Start service
-    start_service
+      if [[ "$enable_multi_thread" =~ ^[Yy]$ ]]; then
+          print_color cyan "  Multi-thread: Enabled"
+      else
+          print_color cyan "  Multi-thread: Disabled"
+      fi
 
-    # Display configuration summary
-    echo ""
-    print_color green "═══════════════════════════════════════" "${BOLD}"
-    print_color green "   ✅ Secure Configuration Summary" "${BOLD}"
-    print_color green "═══════════════════════════════════════" "${BOLD}"
-    echo ""
-    print_color cyan "  IPv4 Address: $ipv4_address"
-    print_color cyan "  Hostname: $hostname"
-    print_color cyan "  Network Name: $network_name"
-    print_color cyan "  Network Secret: [SECURED - stored in ${SECURE_CONFIG_DIR}/network.secret]"
-    print_color cyan "  Protocol: $protocol"
-    print_color cyan "  Port: $port"
-    print_color cyan "  Encryption: AES-256-GCM (Mandatory)"
-    print_color cyan "  IPv6: $([ "$enable_ipv6" =~ ^[Yy]$ ] && echo 'Enabled' || echo 'Disabled')"
-    print_color cyan "  Multi-thread: $([ "$enable_multi_thread" =~ ^[Yy]$ ] && echo 'Enabled' || echo 'Disabled')"
-    print_color cyan "  Stealth Mode: $([ "$stealth_mode" =~ ^[Yy]$ ] && echo 'Enabled' || echo 'Disabled')"
-    print_color cyan "  Peer Whitelist: $([ "$enable_whitelist" =~ ^[Yy]$ ] && echo 'Enabled' || echo 'Disabled')"
-    echo ""
+      if [[ "$stealth_mode" =~ ^[Yy]$ ]]; then
+          print_color cyan "  Stealth Mode: Enabled"
+      else
+          print_color cyan "  Stealth Mode: Disabled"
+      fi
 
-    log "SECURITY" "Secure network configured: $hostname ($ipv4_address) - Protocol: $protocol, Port: $port"
+      if [[ "$enable_whitelist" =~ ^[Yy]$ ]]; then
+          print_color cyan "  Peer Whitelist: Enabled"
+      else
+          print_color cyan "  Peer Whitelist: Disabled"
+      fi
 
-    press_key
-}
+      echo ""
+
+      log "SECURITY" "Secure network configured: $hostname ($ipv4_address) - Protocol: $protocol, Port: $port"
+
+      press_key
+  }
 
 #############################################################################
 # SERVICE MANAGEMENT (SYSTEMD HARDENED)
