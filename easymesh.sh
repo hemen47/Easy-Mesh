@@ -856,30 +856,26 @@ SyslogIdentifier=easymesh
 # Filesystem Protection
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=${INSTALL_DIR} ${CONFIG_DIR} ${SECURE_CONFIG_DIR} /var/log /var/run
+ReadWritePaths=${INSTALL_DIR} ${CONFIG_DIR} ${SECURE_CONFIG_DIR} /var/log /var/run /dev/net
 PrivateTmp=true
 PrivateDevices=false
-ProtectKernelTunables=true
-ProtectKernelModules=true
+ProtectKernelTunables=false
+ProtectKernelModules=false
 ProtectKernelLogs=true
 ProtectControlGroups=true
 
 # Network Protection
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
-IPAddressDeny=any
-IPAddressAllow=localhost
-IPAddressAllow=10.0.0.0/8
-IPAddressAllow=172.16.0.0/12
-IPAddressAllow=192.168.0.0/16
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK AF_PACKET
+# Remove IPAddressDeny/Allow as they conflict with TUN device creation
 
-# Capability Restrictions
+# Capability Restrictions - CRITICAL FIX
 NoNewPrivileges=false
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SYS_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 
-# System Call Filtering
-SystemCallFilter=@system-service @network-io
-SystemCallFilter=~@privileged @resources @obsolete
+# System Call Filtering - RELAXED for TUN device
+SystemCallFilter=@system-service @network-io @io-event
+SystemCallFilter=~@obsolete
 SystemCallErrorNumber=EPERM
 
 # Resource Limits
@@ -893,10 +889,10 @@ LockPersonality=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 RemoveIPC=true
-ProtectHostname=true
+ProtectHostname=false
 ProtectClock=true
 
-# Memory Protection
+# Memory Protection - DISABLED for TUN device
 MemoryDenyWriteExecute=false
 RestrictNamespaces=false
 
