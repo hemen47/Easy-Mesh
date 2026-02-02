@@ -739,6 +739,13 @@ configure_network() {
       # Connection stability options
       cmd_options+=" --latency-first"
       cmd_options+=" --mtu 1400"
+      cmd_options+=" --no-tun"
+
+      if ! grep -q "tun" /dev/net/tun 2>/dev/null || [[ "$(systemd-detect-virt)" == "openvz" ]] || [[ "$(systemd-detect-virt)" == "lxc" ]]; then
+          cmd_options+=" --no-tun"
+          log "INFO" "Restricted VPS detected - using --no-tun mode"
+          print_color yellow "ℹ️  Restricted VPS detected - using userspace networking (--no-tun)"
+      fi
 
       # Stealth mode enhancements
       if [[ "$stealth_mode" =~ ^[Yy]$ ]]; then
