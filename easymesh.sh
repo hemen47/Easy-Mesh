@@ -154,7 +154,8 @@ validate_ip() {
     # IPv4 validation
     local ipv4_regex='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
     if [[ $ip =~ $ipv4_regex ]]; then
-        for octet in $(echo "$ip" | tr '.' ' '); do
+        IFS='.' read -ra octets <<< "$ip"
+        for octet in "${octets[@]}"; do
             if ((octet > 255)); then
                 return 1
             fi
@@ -700,12 +701,11 @@ configure_network() {
     cmd_options+=" --default-protocol $protocol"
 
     # Add listeners with proper binding
-    if [[ "$enable_ipv6" =~ ^[Yy]$ ]]; then
-        cmd_options+=" --listeners ${protocol}://[::]:${port} ${protocol}://0.0.0.0:${port}"
-    else
-        cmd_options+=" --listeners ${protocol}://0.0.0.0:${port}"
-        cmd_options+=" --disable-ipv6"
-    fi
+if [[ "$enable_ipv6" =~ ^[Yy]$ ]]; then
+    print_color cyan "  IPv6: Enabled"
+else
+    print_color cyan "  IPv6: Disabled"
+fi
 
     # Add peer addresses with protocol prefix
     if [[ -n "$peer_addresses" ]]; then
@@ -727,14 +727,14 @@ configure_network() {
         done
     fi
 
-    # SECURITY: Encryption is always enabled
-    cmd_options+=" --enable-encryption"
-    cmd_options+=" --cipher aes-256-gcm"
+
 
     # Multi-thread option
-    if [[ "$enable_multi_thread" =~ ^[Yy]$ ]]; then
-        cmd_options+=" --multi-thread"
-    fi
+if [[ "$enable_multi_thread" =~ ^[Yy]$ ]]; then
+    print_color cyan "  Multi-thread: Enabled"
+else
+    print_color cyan "  Multi-thread: Disabled"
+fi
 
     # RPC portal - CRITICAL for CLI communication
     cmd_options+=" --rpc-portal 127.0.0.1:15888"
@@ -745,20 +745,21 @@ configure_network() {
     cmd_options+=" --mtu 1400"
 
     # Stealth mode enhancements
-    if [[ "$stealth_mode" =~ ^[Yy]$ ]]; then
-        cmd_options+=" --console-log-level error"
-        cmd_options+=" --disable-p2p"  # Force relay for stealth
-        log "SECURITY" "Stealth mode enabled"
-    fi
+if [[ "$stealth_mode" =~ ^[Yy]$ ]]; then
+    print_color cyan "  Stealth Mode: Enabled"
+else
+    print_color cyan "  Stealth Mode: Disabled"
+fi
 
     # Logging level
     cmd_options+=" --console-log-level info"
 
     # Peer whitelist
-    if [[ "$enable_whitelist" =~ ^[Yy]$ ]] && [[ -n "$peer_addresses" ]]; then
-        cmd_options+=" --enable-whitelist"
-        log "SECURITY" "Peer whitelist enabled"
-    fi
+if [[ "$enable_whitelist" =~ ^[Yy]$ ]]; then
+    print_color cyan "  Peer Whitelist: Enabled"
+else
+    print_color cyan "  Peer Whitelist: Disabled"
+fi
 
     # Create systemd service with hardening
     create_secure_service "$cmd_options"
